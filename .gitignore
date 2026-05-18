@@ -1,0 +1,29 @@
+# Секреты
+.env
+
+# Состояние бота
+digest_state.json
+
+# Сохранённые дайджесты (для отладки)
+digest_*.txt
+
+# Локальные файлы отладки и заметок
+debug.txt
+diag.txt
+info-po-botu-digest.txt
+old-version/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
