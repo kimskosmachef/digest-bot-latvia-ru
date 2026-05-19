@@ -17,7 +17,7 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")  # Ключ Anthropic API
 SOURCE_CHANNEL = "@fghjlllkjd"
 
 # Канал публикации дайджеста (на этапе тестирования)
-TARGET_CHANNEL = "@vse_novosti_lv"
+TARGET_CHANNEL = "@kim_test_channel"  # тестовый бот - @kim_test_channel рабочий бот @vse_novosti_lv
 
 # Числовой Telegram ID владельца — только он может управлять ботом
 OWNER_ID = 5793001545
