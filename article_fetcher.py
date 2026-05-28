@@ -147,7 +147,6 @@ def _extract_with_bs4(html: str) -> Optional[str]:
                 return combined
     return None
 
-
 def fetch_article(url: str) -> Optional[str]:
     """
     Скачать статью и вернуть её основной текст.
@@ -157,26 +156,39 @@ def fetch_article(url: str) -> Optional[str]:
     if html is None:
         return None
 
-    # Сначала пробуем trafilatura
-    text = _extract_with_trafilatura(html)
-    if text:
-        log.info("trafilatura извлекла %d симв. из %s", len(text), url)
-    else:
-        # Fallback на BeautifulSoup
-        log.info("trafilatura не справилась с %s, пробую BeautifulSoup", url)
+    # Для некоторых доменов trafilatura выдаёт мусор (JS из <script>) вместо
+    # текста — для них сразу идём в BeautifulSoup.
+    host = (urlparse(url).hostname or "").lower()
+    bs4_only = any(domain in host for domain in config.BS4_ONLY_DOMAINS)
+
+    text = None
+    if bs4_only:
+        log.info("Для %s пропускаю trafilatura, сразу BeautifulSoup", url)
         text = _extract_with_bs4(html)
         if text:
             log.info("BeautifulSoup извлёк %d симв. из %s", len(text), url)
         else:
-            log.warning("Ни trafilatura, ни BeautifulSoup не извлекли значимый текст из %s", url)
+            log.warning("BeautifulSoup не извлёк значимый текст из %s", url)
             return None
+    else:
+        # Обычная стратегия: сначала trafilatura, потом BS4 как fallback
+        text = _extract_with_trafilatura(html)
+        if text:
+            log.info("trafilatura извлекла %d симв. из %s", len(text), url)
+        else:
+            log.info("trafilatura не справилась с %s, пробую BeautifulSoup", url)
+            text = _extract_with_bs4(html)
+            if text:
+                log.info("BeautifulSoup извлёк %d симв. из %s", len(text), url)
+            else:
+                log.warning("Ни trafilatura, ни BeautifulSoup не извлекли значимый текст из %s", url)
+                return None
 
     # Обрезаем длинные статьи, чтобы не раздувать стоимость API
     if len(text) > config.ARTICLE_MAX_CHARS:
         text = text[:config.ARTICLE_MAX_CHARS] + "\n[...текст обрезан]"
 
     return text
-
 
 def fetch_article_or_placeholder(url: str, title: str = "") -> tuple[Optional[str], Optional[str]]:
     """

@@ -62,6 +62,12 @@ PROXY_URL = "socks5h://localhost:1055"
 # Проверка по вхождению подстроки в hostname.
 PROXY_DOMAINS = ["lsm.lv"]
 
+# Домены, для которых нужно пропускать trafilatura и сразу использовать
+# BeautifulSoup-извлечение. Причина: на сайтах с JS-фреймворком (Delfi на Nuxt)
+# trafilatura вытаскивает мусор из <script> вместо текста статьи, а BS4 по
+# селектору article p берёт чистый полный текст.
+BS4_ONLY_DOMAINS = ["delfi.lv"]
+
 # Отдельный (более короткий) тайм-аут для запросов через прокси: если телефон
 # офлайн, не хочется ждать полный ARTICLE_FETCH_TIMEOUT на каждой LSM-ссылке.
 PROXY_FETCH_TIMEOUT = 20
