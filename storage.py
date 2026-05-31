@@ -113,6 +113,60 @@ def set_tag(item_id: int, tag: Optional[str], level: int = 0) -> bool:
     return False
 
 
+def move_to_top(item_id: int) -> dict:
+    """
+    Поднять новость наверх списка.
+
+    Если у новости есть тег, вместе с ней поднимаются все остальные новости
+    с тем же тегом: выбранная становится первой в группе, остальные тегированные
+    следуют за ней в исходном относительном порядке. Остальные новости
+    (с другими тегами или без тега) сохраняют свой относительный порядок.
+
+    Возвращает dict со статусом:
+        found       — есть ли такая новость в списке;
+        already_top — был ли итоговый порядок идентичен исходному
+                      (т.е. реально ничего не изменилось);
+        tag         — тег целевой новости (None если без тега);
+        count       — сколько новостей в сумме переехало наверх
+                      (1 для одиночки, N для тегированной группы).
+    """
+    state = load()
+    items = state["items"]
+
+    target = next((it for it in items if it["id"] == item_id), None)
+    if target is None:
+        return {"found": False, "already_top": False, "tag": None, "count": 0}
+
+    tag = target.get("tag")
+
+    if tag:
+        same_tag = [
+            it for it in items
+            if it.get("tag") == tag and it["id"] != target["id"]
+        ]
+        others = [it for it in items if it.get("tag") != tag]
+        new_items = [target] + same_tag + others
+        count = len(same_tag) + 1
+    else:
+        others = [it for it in items if it["id"] != target["id"]]
+        new_items = [target] + others
+        count = 1
+
+    # Строгая проверка "уже наверху": реально ли что-то изменится.
+    already_top = (new_items == items)
+
+    if not already_top:
+        state["items"] = new_items
+        save(state)
+
+    return {
+        "found": True,
+        "already_top": already_top,
+        "tag": tag,
+        "count": count,
+    }
+
+
 def clear() -> None:
     """Полностью очистить список."""
     save(_empty_state())

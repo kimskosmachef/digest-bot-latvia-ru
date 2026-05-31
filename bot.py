@@ -10,6 +10,7 @@
     /tag N hashtag — установить тег для новости N
     /tag N    — снять тег с новости N
     /remove N — удалить новость N из списка
+    /maketop N — поднять новость N наверх списка (с тег-группой, если есть)
     /clear    — очистить весь список
     /digest   — собрать дайджест: загрузить статьи, сгенерировать пересказы,
                 опубликовать в TARGET_CHANNEL
@@ -236,6 +237,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/tag N hashtag+++ — большая сводка\n"
         "/tag N — снять тег\n"
         "/remove N — удалить новость\n"
+        "/maketop N — поднять новость наверх (вместе с её тег-группой)\n"
         "/clear — очистить список\n"
         "/digest — собрать дайджест\n\n"
         "Хэштеги в канале-источнике тоже понимают плюсы:\n"
@@ -332,6 +334,41 @@ async def cmd_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"🗑 Новость #{item_id} удалена.")
     else:
         await update.message.reply_text(f"Новости #{item_id} нет в списке.")
+
+
+@_owner_only
+async def cmd_maketop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "Использование: /maketop N — поднять новость #N наверх списка.\n"
+            "Если у новости есть тег — вся группа с этим тегом поедет наверх, "
+            "а #N станет первой в группе."
+        )
+        return
+    try:
+        item_id = int(args[0])
+    except ValueError:
+        await update.message.reply_text("Аргумент должен быть числом — id новости.")
+        return
+
+    result = storage.move_to_top(item_id)
+
+    if not result["found"]:
+        await update.message.reply_text(f"Новости #{item_id} нет в списке.")
+        return
+
+    if result["already_top"]:
+        await update.message.reply_text(f"Новость #{item_id} уже наверху.")
+        return
+
+    if result["tag"] and result["count"] > 1:
+        await update.message.reply_text(
+            f"✅ Новость #{item_id} поднята наверх вместе с группой "
+            f"#{result['tag']} ({result['count']} новостей)."
+        )
+    else:
+        await update.message.reply_text(f"✅ Новость #{item_id} поднята наверх.")
 
 
 @_owner_only
@@ -472,6 +509,7 @@ def main():
     app.add_handler(CommandHandler("list", cmd_list))
     app.add_handler(CommandHandler("tag", cmd_tag))
     app.add_handler(CommandHandler("remove", cmd_remove))
+    app.add_handler(CommandHandler("maketop", cmd_maketop))
     app.add_handler(CommandHandler("clear", cmd_clear))
     app.add_handler(CommandHandler("digest", cmd_digest))
 

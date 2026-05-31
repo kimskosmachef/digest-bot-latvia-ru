@@ -116,28 +116,16 @@ def _format_source_link(source: str, url: str) -> str:
 
 # ===== Группировка =====
 
-def _group_items(items: list) -> tuple[dict, list]:
+def _by_tag(items: list) -> dict[str, list]:
     """
-    Разделить новости на тематические группы и одиночные.
-    Группы меньше MIN_GROUP_SIZE расформировываются в одиночные.
-    Возвращает (group_dict, untagged_list).
+    Сгруппировать новости по тегу. Возвращает {tag: [items]} в порядке появления.
+    Новости без тега не включаются. Внутри каждой группы порядок — как в items.
     """
     by_tag: dict[str, list] = {}
-    untagged: list = []
     for it in items:
         if it.get("tag"):
             by_tag.setdefault(it["tag"], []).append(it)
-        else:
-            untagged.append(it)
-
-    real_groups: dict[str, list] = {}
-    for tag, group in by_tag.items():
-        if len(group) >= config.MIN_GROUP_SIZE:
-            real_groups[tag] = group
-        else:
-            untagged.extend(group)
-
-    return real_groups, untagged
+    return by_tag
 
 
 # ===== Главная функция =====
@@ -162,53 +150,69 @@ def build_digest(items: list, fetched_articles: dict, failed_items: list) -> lis
 
     # Группировка — но в группы попадают только те, у которых есть текст
     items_with_text = [it for it in items if it["id"] in fetched_articles]
-    groups, untagged = _group_items(items_with_text)
+
+    # Группируем по тегам, определяем какие группы "настоящие" (>= MIN_GROUP_SIZE)
+    by_tag = _by_tag(items_with_text)
+    real_group_tags = {
+        tag for tag, group in by_tag.items()
+        if len(group) >= config.MIN_GROUP_SIZE
+    }
 
     blocks: list[str] = []
+    emitted_tags: set[str] = set()
 
-    # Тематические группы
-    for tag, group in groups.items():
-        # Если в группе есть новости с разным уровнем — берём максимальный
-        max_level = max((it.get("level", 0) for it in group), default=0)
-        log.info("Генерирую сводный пересказ для группы #%s (%d новостей, уровень %d)",
-                 tag, len(group), max_level)
-        items_with_full_text = [
-            {**it, "text": fetched_articles[it["id"]]} for it in group
-        ]
-        try:
-            summary = _ask_claude(_group_summary_prompt(tag, items_with_full_text, max_level))
-        except APIError as e:
-            log.error("Ошибка Claude API для группы #%s: %s", tag, e)
-            summary = "_(не удалось сгенерировать пересказ темы)_"
+    # Идём по items_with_text в том порядке, как они лежат в storage.
+    # Это обеспечивает работу /maketop: первая новость в списке = первый блок в дайджесте.
+    # Тег-группа выводится один раз — на позиции своего первого элемента в порядке items.
+    for it in items_with_text:
+        tag = it.get("tag")
 
-        sources_links = " ".join(
-            _format_source_link(it["source"], it["url"]) for it in group
-        )
-        block = (
-            f"📌 {summary}\n\n"
-            f"Источники: {sources_links}"
-        )
-        blocks.append(block)
+        # Тегированная новость, входящая в реальную группу
+        if tag and tag in real_group_tags:
+            if tag in emitted_tags:
+                continue
+            emitted_tags.add(tag)
+            group = by_tag[tag]
+            max_level = max((x.get("level", 0) for x in group), default=0)
+            log.info("Генерирую сводный пересказ для группы #%s (%d новостей, уровень %d)",
+                     tag, len(group), max_level)
+            items_with_full_text = [
+                {**x, "text": fetched_articles[x["id"]]} for x in group
+            ]
+            try:
+                summary = _ask_claude(_group_summary_prompt(tag, items_with_full_text, max_level))
+            except APIError as e:
+                log.error("Ошибка Claude API для группы #%s: %s", tag, e)
+                summary = "_(не удалось сгенерировать пересказ темы)_"
 
-    # Одиночные новости
-    for it in untagged:
-        log.info("Генерирую пересказ для новости #%d", it["id"])
-        try:
-            summary = _ask_claude(_single_summary_prompt(
-                it["title"], it["source"], fetched_articles[it["id"]],
-            ))
-        except APIError as e:
-            log.error("Ошибка Claude API для новости #%d: %s", it["id"], e)
-            summary = "_(не удалось сгенерировать пересказ)_"
+            sources_links = " ".join(
+                _format_source_link(x["source"], x["url"]) for x in group
+            )
+            block = (
+                f"📌 {summary}\n\n"
+                f"Источники: {sources_links}"
+            )
+            blocks.append(block)
 
-        title_safe = _escape_md(it["title"]) if it["title"] else "Без заголовка"
-        source_link = _format_source_link(it["source"], it["url"])
-        block = (
-            f"▫️ *{title_safe}*\n"
-            f"{summary}\n"
-            f"{source_link}"
-        )
-        blocks.append(block)
+        # Одиночная новость (без тега ИЛИ тег с группой меньше MIN_GROUP_SIZE)
+        else:
+            log.info("Генерирую пересказ для новости #%d", it["id"])
+            try:
+                summary = _ask_claude(_single_summary_prompt(
+                    it["title"], it["source"], fetched_articles[it["id"]],
+                ))
+            except APIError as e:
+                log.error("Ошибка Claude API для новости #%d: %s", it["id"], e)
+                summary = "_(не удалось сгенерировать пересказ)_"
+
+            title_safe = _escape_md(it["title"]) if it["title"] else "Без заголовка"
+            source_link = _format_source_link(it["source"], it["url"])
+            block = (
+                f"▫️ *{title_safe}*\n"
+                f"{summary}\n"
+                f"{source_link}"
+            )
+            blocks.append(block)
 
     # Если ничего не вышло — короткий дайджест-заглушка
     if not blocks:
