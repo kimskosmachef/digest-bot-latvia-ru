@@ -146,7 +146,7 @@ def build_digest(items: list, fetched_articles: dict, failed_items: list) -> lis
     parts: list[str] = []
 
     # Шапка
-    header = f"📰 *Дайджест за {today}*\n"
+    header = f"📰 ⚠️⚠️⚠️ *Дайджест за {today}*\n"
 
     # Группировка — но в группы попадают только те, у которых есть текст
     items_with_text = [it for it in items if it["id"] in fetched_articles]
@@ -185,7 +185,7 @@ def build_digest(items: list, fetched_articles: dict, failed_items: list) -> lis
                 log.error("Ошибка Claude API для группы #%s: %s", tag, e)
                 summary = "_(не удалось сгенерировать пересказ темы)_"
 
-            sources_links = " ".join(
+            sources_links = " ▪️ ".join(
                 _format_source_link(x["source"], x["url"]) for x in group
             )
             block = (
