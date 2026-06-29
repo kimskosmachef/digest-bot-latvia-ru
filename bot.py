@@ -36,6 +36,7 @@ import config
 import storage
 import article_fetcher
 import digest_builder
+from digest_builder import _escape_md
 
 logging.basicConfig(
     level=logging.INFO,
@@ -263,12 +264,12 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tag_str = f" #{it['tag']}{plus_str}"
         else:
             tag_str = ""
-        title = it["title"] or it["url"]
-        # Обрезаем длинный заголовок для компактности
-        if len(title) > 80:
-            title = title[:77] + "..."
-        lines.append(f"{it['id']}. [{it['source']}] {title}{tag_str}")
-    await update.message.reply_text("\n".join(lines))
+        if it["title"]:
+            entry = f"[{_escape_md(it['title'])}]({it['url']})"
+        else:
+            entry = _escape_md(it["url"])
+        lines.append(f"{it['id']}. [{it['source']}] {entry}{tag_str}")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
 
 
 @_owner_only
