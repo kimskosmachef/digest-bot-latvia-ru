@@ -313,7 +313,7 @@ def _split_for_telegram(
             current = ""
             continue
 
-        candidate = current + ("\n" + block if current.strip() else block)
+        candidate = current + block
         if len(candidate) > limit:
             # Закрываем текущую часть и начинаем новую
             if current.strip():
@@ -328,7 +328,7 @@ def _split_for_telegram(
             f"• {_escape_md(f['item']['title'] or f['item']['url'])} — {f['reason']}"
             for f in failed_items
         )
-        candidate = current + "\n" + failed_block
+        candidate = current + failed_block
         if len(candidate) > limit:
             if current.strip():
                 parts.append(current.rstrip())
