@@ -18,12 +18,16 @@
 Версия v0.2 — с подключённым Claude API и загрузкой полных текстов.
 """
 
+import asyncio
 import logging
+import os
 import re
+from datetime import datetime
 from typing import Optional
 
 from telegram import Update
 from telegram.constants import ChatType, ParseMode
+from telegram.error import BadRequest, NetworkError, TimedOut
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -88,6 +92,58 @@ def _extract_hashtag(text: str) -> Optional[tuple[str, int]]:
     name = match.group(1).lower()
     pluses = match.group(2) or ""
     return name, len(pluses)
+
+
+async def _send_with_retry(
+    bot,
+    chat_id: str,
+    text: str,
+    part_num: int,
+    total_parts: int,
+    **kwargs,
+) -> None:
+    """Отправляет часть дайджеста с retry при сетевых таймаутах (до 4 попыток)."""
+    delays = [2, 4, 8]
+    for attempt in range(4):
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                write_timeout=30,
+                read_timeout=30,
+                **kwargs,
+            )
+            return
+        except (TimedOut, NetworkError) as e:
+            if isinstance(e, BadRequest):
+                raise  # 400 Bad Request — не транзиентная, retry не поможет
+            if attempt < 3:
+                delay = delays[attempt]
+                log.warning(
+                    "Часть %d/%d: попытка %d/4 после таймаута, ждём %d сек",
+                    part_num, total_parts, attempt + 2, delay,
+                )
+                await asyncio.sleep(delay)
+            else:
+                log.error(
+                    "Часть %d/%d: все 4 попытки исчерпаны, последняя ошибка: %s",
+                    part_num, total_parts, e,
+                )
+                raise
+
+
+async def _send_digest_failure_dm(update, digest_filename: str) -> None:
+    """Отправляет страховочный .txt-файл владельцу при падении публикации."""
+    if os.path.exists(digest_filename):
+        try:
+            with open(digest_filename, "rb") as f:
+                await update.message.reply_document(
+                    document=f,
+                    filename=digest_filename,
+                    caption="Текст дайджеста, который не удалось опубликовать.",
+                )
+        except Exception as e:
+            log.warning("Не удалось отправить файл с дайджестом: %s", e)
 
 
 # ===== Обработчик сообщений в канале-источнике =====
@@ -435,9 +491,6 @@ async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Этап 2: генерация дайджеста (это синхронный код с обращениями к Claude — может занять время)
     # Запускаем в отдельном потоке, чтобы не блокировать event loop бота.
-    import asyncio
-    import os
-    from datetime import datetime
     try:
         loop = asyncio.get_running_loop()
         parts = await loop.run_in_executor(
@@ -462,35 +515,40 @@ async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log.warning("Не удалось сохранить дайджест в файл: %s", e)
 
     # Этап 3: публикация в целевой канал
-    try:
-        for i, part in enumerate(parts, 1):
-            log.info("Отправляю часть %d/%d (длина %d симв.)", i, len(parts), len(part))
-            await context.bot.send_message(
-                chat_id=config.TARGET_CHANNEL,
-                text=part,
+    for i, part in enumerate(parts, 1):
+        log.info("Отправляю часть %d/%d (длина %d симв.)", i, len(parts), len(part))
+        try:
+            await _send_with_retry(
+                context.bot, config.TARGET_CHANNEL, part, i, len(parts),
                 parse_mode="Markdown",
                 disable_web_page_preview=True,
             )
-            log.info("Опубликована часть %d/%d", i, len(parts))
-    except Exception as e:
-        log.exception("Ошибка публикации в канал")
-        await update.message.reply_text(
-            f"❌ Ошибка публикации: {e}\n\n"
-            f"📄 Сгенерированный дайджест сохранён в файле {digest_filename} "
-            "(в каталоге бота)."
-        )
-        # Если файл сохранился — отправим его владельцу в личку
-        if os.path.exists(digest_filename):
-            try:
-                with open(digest_filename, "rb") as f:
-                    await update.message.reply_document(
-                        document=f,
-                        filename=digest_filename,
-                        caption="Текст дайджеста, который не удалось опубликовать."
-                    )
-            except Exception as e2:
-                log.warning("Не удалось отправить файл с дайджестом: %s", e2)
-        return
+        except (TimedOut, NetworkError) as e:
+            if isinstance(e, BadRequest):
+                # _send_with_retry пробросила без retry — ошибка контента
+                log.exception("Ошибка публикации в канал")
+                await update.message.reply_text(
+                    f"❌ Ошибка публикации: {e}\n\n"
+                    f"📄 Сгенерированный дайджест сохранён в файле {digest_filename} "
+                    "(в каталоге бота)."
+                )
+            else:
+                # все 4 попытки исчерпаны
+                await update.message.reply_text(
+                    f"❌ Не удалось опубликовать часть {i}/{len(parts)} после 4 попыток"
+                )
+            await _send_digest_failure_dm(update, digest_filename)
+            return
+        except Exception as e:
+            log.exception("Ошибка публикации в канал")
+            await update.message.reply_text(
+                f"❌ Ошибка публикации: {e}\n\n"
+                f"📄 Сгенерированный дайджест сохранён в файле {digest_filename} "
+                "(в каталоге бота)."
+            )
+            await _send_digest_failure_dm(update, digest_filename)
+            return
+        log.info("Опубликована часть %d/%d", i, len(parts))
 
     await update.message.reply_text(
         f"✅ Дайджест опубликован в {config.TARGET_CHANNEL} ({len(parts)} сообщений)."
