@@ -306,6 +306,50 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 
+def _split_list(header: str, item_lines: list[str]) -> list[str]:
+    """
+    Разбить строки списка на части под TELEGRAM_MESSAGE_LIMIT.
+
+    Шапка (header, с trailing \n) включается только в первую часть.
+    build_part(..., first=True) → header + "\n" + body, что даёт пустую строку
+    между шапкой и первым пунктом (двойной \n).
+
+    Degenerate case: если первая же строка вместе с шапкой не влезает в лимит,
+    шапка всё равно приклеится к ней — Telegram вернёт BadRequest на всё
+    сообщение. Это осознанное поведение: такой сценарий практически невозможен
+    для наших URL (которые всегда намного короче 4096 символов).
+    """
+    limit = config.TELEGRAM_MESSAGE_LIMIT
+
+    def build_part(lines: list[str], first: bool) -> str:
+        body = "\n".join(lines)
+        return (header + "\n" + body) if first else body
+
+    parts: list[str] = []
+    current: list[str] = []
+    is_first = True
+
+    for line in item_lines:
+        candidate = build_part(current + [line], is_first)
+        if len(candidate) <= limit:
+            current.append(line)
+        else:
+            if current:
+                parts.append(build_part(current, is_first))
+                is_first = False
+            if len(line) > limit:
+                log.warning(
+                    "Строка /list длиннее лимита %d симв., отправляем как есть: %r…",
+                    limit, line[:80],
+                )
+            current = [line]
+
+    if current:
+        parts.append(build_part(current, is_first))
+
+    return parts
+
+
 @_owner_only
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     items = storage.get_items()
@@ -313,7 +357,8 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📭 Список пуст.")
         return
 
-    lines = [f"📋 Список на сегодня ({len(items)} новостей):\n"]
+    header = f"📋 Список на сегодня ({len(items)} новостей):\n"
+    item_lines = []
     for it in items:
         if it.get("tag"):
             plus_str = "+" * it.get("level", 0)
@@ -324,8 +369,10 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             entry = f"[{_escape_md(it['title'])}]({it['url']})"
         else:
             entry = _escape_md(it["url"])
-        lines.append(f"{it['id']}. [{it['source']}] {entry}{tag_str}")
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+        item_lines.append(f"{it['id']}. [{it['source']}] {entry}{tag_str}")
+
+    for part in _split_list(header, item_lines):
+        await update.message.reply_text(part, parse_mode=ParseMode.MARKDOWN)
 
 
 @_owner_only
